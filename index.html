@@ -54,7 +54,21 @@
             direction: rtl; unicode-bidi: plaintext;
         }
         body { padding-bottom: 34px; }
+        .file-list-item { display:flex; align-items:center; gap:10px; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; margin-bottom:8px; background:#fff; transition: all .2s; }
+        .file-list-item:hover { border-color: var(--brand); box-shadow: 0 2px 6px rgba(0,0,0,.06); }
+        .file-list-item.active { border-color: var(--brand); background:#eff6ff; }
+        .file-list-item .file-icon { font-size:1.3rem; color:var(--brand); }
+        .file-list-item .file-name { font-weight:600; flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .file-list-item .file-meta { font-size:.8rem; color:#64748b; }
+        .file-badge { font-size:.7rem; padding:2px 8px; border-radius:6px; }
+        .compare-table th { background:#f1f5f9; font-size:.85rem; }
+        .compare-table td { font-size:.85rem; }
+        .file-selector { max-width: 400px; }
+        .scope-toggle .btn { font-size:.85rem; }
     </style>
+  <meta property="og:image" content="https://bolt.new/static/og_default.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://bolt.new/static/og_default.png">
 </head>
 <body>
 <div id="footerCredit">تصميم وتطوير مديرية تكنولوجيا المعلومات - ديوان المحاسبة الأردني - بشار شعواطة & أحمد ابو شربك</div>
@@ -69,6 +83,7 @@
             <ul class="nav flex-column mt-3">
                 <li class="nav-item"><a class="nav-link active" data-view="dashboard"><i class="fa-solid fa-chart-pie me-2"></i><span data-i18n="navDashboard">لوحة التحليل</span></a></li>
                 <li class="nav-item"><a class="nav-link" data-view="upload"><i class="fa-solid fa-file-arrow-up me-2"></i><span data-i18n="navUpload">رفع الملفات</span></a></li>
+                <li class="nav-item"><a class="nav-link" data-view="compare"><i class="fa-solid fa-code-compare me-2"></i><span data-i18n="navCompare">مقارنة الملفات</span></a></li>
                 <li class="nav-item"><a class="nav-link" data-view="ai"><i class="fa-solid fa-robot me-2"></i><span data-i18n="navAI">تقرير التدقيق الذكي</span></a></li>
                 <li class="nav-item"><a class="nav-link" data-view="chat"><i class="fa-solid fa-comments me-2"></i><span data-i18n="navChat">الدردشة التحليلية</span></a></li>
                 <li class="nav-item"><a class="nav-link" data-view="settings"><i class="fa-solid fa-gear me-2"></i><span data-i18n="navSettings">الإعدادات</span></a></li>
@@ -158,9 +173,63 @@
                     <i class="fa-solid fa-cloud-arrow-up text-primary display-4 mb-3"></i>
                     <h5 data-i18n="uploadHint">اسحب ملف Excel أو CSV هنا أو اضغط للاختيار</h5>
                     <p class="text-muted small mb-0" data-i18n="uploadSupport">يدعم ملفات XLSX, XLSM, XLS, XLSB, CSV — بأي أسماء أو ترتيب للأعمدة (عربي/إنجليزي)</p>
-                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xlsm,.xls,.xlsb,.txt" style="display:none;">
+                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xlsm,.xls,.xlsb,.txt" multiple style="display:none;">
                 </div>
                 <div id="uploadStatus" class="mb-3"></div>
+
+                <!-- Uploaded files list -->
+                <div id="fileListWrap" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                        <h6 class="fw-bold mb-0"><i class="fa-solid fa-files me-1 text-primary"></i><span data-i18n="uploadedFiles">الملفات المرفوعة</span></h6>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary btn-sm" onclick="selectAllFiles()"><i class="fa-solid fa-check-double me-1"></i><span data-i18n="selectAll">تحديد الكل</span></button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="clearAllFiles()"><i class="fa-solid fa-trash me-1"></i><span data-i18n="clearAll">مسح الكل</span></button>
+                        </div>
+                    </div>
+                    <div id="fileList"></div>
+                    <div class="mt-3 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-primary btn-sm" onclick="compareSelected()"><i class="fa-solid fa-code-compare me-1"></i><span data-i18n="compareSelected">مقارنة الملفات المحددة</span></button>
+                        <button class="btn btn-outline-primary btn-sm" onclick="analyzeSelected()"><i class="fa-solid fa-wand-magic-sparkles me-1"></i><span data-i18n="analyzeSelected">تحليل الملفات المحددة</span></button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ---------------- Comparison ---------------- -->
+            <section id="view-compare" class="section">
+                <div id="compareEmpty" class="alert alert-light border text-center py-5">
+                    <i class="fa-solid fa-code-compare display-5 text-secondary d-block mb-3"></i>
+                    <span data-i18n="compareEmpty">ارفع ملفين أو أكثر من صفحة «رفع الملفات» ثم حددها واضغط «مقارنة الملفات المحددة».</span>
+                    <div class="mt-3"><button class="btn btn-primary btn-sm" onclick="showView('upload')"><i class="fa-solid fa-file-arrow-up me-1"></i><span data-i18n="goUpload">رفع ملف</span></button></div>
+                </div>
+                <div id="compareContent" style="display:none;">
+                    <div class="card card-kpi bg-white p-3 mb-4">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                            <div>
+                                <div class="text-muted small fw-bold" data-i18n="comparedFiles">الملفات المقارنة</div>
+                                <div class="fw-bold fs-5" id="compareFileCount">—</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-muted small fw-bold" data-i18n="highestRisk">أعلى خطورة</div>
+                                <h3 class="fw-bold m-0" id="compareMaxRisk">—</h3>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-muted small fw-bold" data-i18n="sharedFindingsCount">ملاحظات مشتركة</div>
+                                <h3 class="fw-bold m-0" id="compareSharedCount">—</h3>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-muted small fw-bold" data-i18n="sharedBeneficiariesCount">مستفيدون مشتركون</div>
+                                <h3 class="fw-bold m-0" id="compareSharedBenCount">—</h3>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 mb-4" id="compareChartsRow"></div>
+                    <h6 class="fw-bold mb-3"><i class="fa-solid fa-table text-primary me-1"></i><span data-i18n="findingMatrix">مصفوفة الملاحظات عبر الملفات</span></h6>
+                    <div id="findingMatrixWrap" class="mb-4"></div>
+                    <h6 class="fw-bold mb-3"><i class="fa-solid fa-gauge-high text-primary me-1"></i><span data-i18n="kpiComparison">مقارنة المؤشرات</span></h6>
+                    <div id="kpiComparisonWrap" class="mb-4"></div>
+                    <h6 class="fw-bold mb-3"><i class="fa-solid fa-users text-primary me-1"></i><span data-i18n="sharedBeneficiaries">مستفيدون مشتركون بين الملفات</span></h6>
+                    <div id="sharedBenWrap"></div>
+                </div>
             </section>
 
             <!-- ---------------- AI Analysis ---------------- -->
@@ -169,6 +238,10 @@
                     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
                         <h5 class="fw-bold mb-0"><i class="fa-solid fa-robot text-primary me-2"></i><span data-i18n="aiTitle">تقرير التدقيق الذكي</span></h5>
                         <span class="badge bg-secondary" id="aiModelBadge">—</span>
+                    </div>
+                    <div id="aiScopeBar" class="alert alert-light border small mb-3 d-flex align-items-center gap-2" style="display:none;">
+                        <i class="fa-solid fa-layer-group text-primary"></i>
+                        <span id="aiScopeText"></span>
                     </div>
                     <div class="row g-3 align-items-end mb-3">
                         <div class="col-md-5">
@@ -205,6 +278,10 @@
                     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
                         <h5 class="fw-bold mb-0"><i class="fa-solid fa-comments text-primary me-2"></i><span data-i18n="chatTitle">الدردشة التحليلية</span></h5>
                         <span class="badge bg-secondary" id="chatModelBadge">—</span>
+                    </div>
+                    <div id="chatScopeBar" class="alert alert-light border small mb-3 d-flex align-items-center gap-2" style="display:none;">
+                        <i class="fa-solid fa-layer-group text-primary"></i>
+                        <span id="chatScopeText"></span>
                     </div>
                     <div id="chatHint" class="alert alert-secondary small" data-i18n="chatHint">ارفع ملفاً ثم اسأل أسئلة تحليلية على أرقامه (مثال: ما أكثر البنود تهديداً بالعجز؟).</div>
                     <div id="chatBox" class="chat-box mb-3"></div>
@@ -274,7 +351,7 @@ function resolveApiBase() {
     }
 }
 let API_BASE = resolveApiBase();
-const state = { lang: 'ar', config: {}, report: null, reportId: null, charts: {}, ollama: { ok: false, models: [] }, chat: [] };
+const state = { lang: 'ar', config: {}, report: null, reportId: null, charts: {}, ollama: { ok: false, models: [] }, chat: [], uploadedFiles: [], selectedReportIds: [], compareData: null, compareCharts: {} };
 
 /* =========================================================================
    Translations (Arabic / English)
@@ -317,6 +394,18 @@ const I18N = {
         countLbl: 'العدد', standard: 'المعيار', itemsLbl: 'العناصر', showTable: 'عرض التفاصيل', hideTable: 'إخفاء التفاصيل',
         typeFinancialPosition: 'مواقف مالية', typeLedger: 'سجل حركات', typeMixed: 'مواقف مالية + سجلات حركات', typeUnknown: 'غير محدد',
         chartsTitle: 'الرسوم التحليلية',
+        navCompare: 'مقارنة الملفات',
+        uploadedFiles: 'الملفات المرفوعة', selectAll: 'تحديد الكل', clearAll: 'مسح الكل',
+        compareSelected: 'مقارنة الملفات المحددة', analyzeSelected: 'تحليل الملفات المحددة',
+        compareEmpty: 'ارفع ملفين أو أكثر من صفحة «رفع الملفات» ثم حددها واضغط «مقارنة الملفات المحددة».',
+        comparedFiles: 'الملفات المقارنة', highestRisk: 'أعلى خطورة', sharedFindingsCount: 'ملاحظات مشتركة',
+        sharedBeneficiariesCount: 'مستفيدون مشتركون', findingMatrix: 'مصفوفة الملاحظات عبر الملفات',
+        kpiComparison: 'مقارنة المؤشرات', sharedBeneficiaries: 'مستفيدون مشتركون بين الملفات',
+        scopeAll: 'كل الملفات المحددة', scopeSingle: 'ملف واحد', analyzingFiles: 'جارٍ تحليل الملفات...',
+        errCompare: 'يجب تحديد ملفين على الأقل للمقارنة.', errNoSelection: 'لم يتم تحديد أي ملف.',
+        riskComparison: 'مقارنة درجات الخطورة', recordsComparison: 'مقارنة عدد السجلات',
+        findingsComparison: 'مقارنة عدد الملاحظات', highFindingsComparison: 'مقارنة الملاحظات عالية الخطورة',
+        transactions: 'حركات', noSharedBen: 'لا يوجد مستفيدون مشتركون بين الملفات.',
     },
     en: {
         appName: 'Smart Auditor',
@@ -355,6 +444,18 @@ const I18N = {
         countLbl: 'Count', standard: 'Standard', itemsLbl: 'Items', showTable: 'Show details', hideTable: 'Hide details',
         typeFinancialPosition: 'Financial position', typeLedger: 'Transaction ledger', typeMixed: 'Position + ledger', typeUnknown: 'Unknown',
         chartsTitle: 'Analytical charts',
+        navCompare: 'Compare Files',
+        uploadedFiles: 'Uploaded files', selectAll: 'Select All', clearAll: 'Clear All',
+        compareSelected: 'Compare Selected Files', analyzeSelected: 'Analyze Selected Files',
+        compareEmpty: 'Upload two or more files from the Upload page, then select them and click "Compare Selected Files".',
+        comparedFiles: 'Compared files', highestRisk: 'Highest risk', sharedFindingsCount: 'Shared findings',
+        sharedBeneficiariesCount: 'Shared beneficiaries', findingMatrix: 'Findings matrix across files',
+        kpiComparison: 'KPI comparison', sharedBeneficiaries: 'Shared beneficiaries across files',
+        scopeAll: 'All selected files', scopeSingle: 'Single file', analyzingFiles: 'Analyzing files...',
+        errCompare: 'Select at least two files to compare.', errNoSelection: 'No file selected.',
+        riskComparison: 'Risk score comparison', recordsComparison: 'Records count comparison',
+        findingsComparison: 'Findings count comparison', highFindingsComparison: 'High-risk findings comparison',
+        transactions: 'transactions', noSharedBen: 'No shared beneficiaries across files.',
     }
 };
 const t = (k) => (I18N[state.lang] && I18N[state.lang][k]) || k;

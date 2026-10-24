@@ -1146,3 +1146,217 @@ def build_digest(report: dict, lang: str = "ar", max_items: int = 8) -> str:
 def build_chat_context(report: dict, lang: str = "ar") -> str:
     """سياق كامل نسبياً للدردشة التفاعلية."""
     return build_digest(report, lang=lang, max_items=15)
+
+
+# ---------------------------------------------------------------------------
+# مقارنة عدة ملفات وتحليل مشترك
+# ---------------------------------------------------------------------------
+def compare_reports(reports: list[dict]) -> dict:
+    """يبني تقرير مقارنة بين عدة تقارير تدقيق."""
+    import json as _json
+
+    files_info = []
+    for r in reports:
+        summary = r.get("summary", {}) or {}
+        findings = r.get("findings", []) or []
+        files_info.append({
+            "filename": r.get("filename", ""),
+            "report_id": r.get("report_id", ""),
+            "file_type": r.get("file_type", "unknown"),
+            "total_records_scanned": r.get("total_records_scanned", 0),
+            "risk_score": r.get("risk_score", 0),
+            "risk_level": r.get("risk_level", "low"),
+            "findings_count": len(findings),
+            "high_count": len([f for f in findings if f.get("severity") == "high"]),
+            "medium_count": len([f for f in findings if f.get("severity") == "medium"]),
+            "low_count": len([f for f in findings if f.get("severity") == "low"]),
+            "kpis": r.get("kpis", {}) or {},
+            "findings": findings,
+        })
+
+    labels = [_short_name(f["filename"]) for f in files_info]
+
+    # رسوم المقارنة
+    comparison = {
+        "risk_chart": {
+            "labels": labels[:],
+            "values": [f["risk_score"] for f in files_info],
+        },
+        "records_chart": {
+            "labels": labels[:],
+            "values": [f["total_records_scanned"] for f in files_info],
+        },
+        "findings_chart": {
+            "labels": labels[:],
+            "values": [f["findings_count"] for f in files_info],
+        },
+        "high_chart": {
+            "labels": labels[:],
+            "values": [f["high_count"] for f in files_info],
+        },
+        "kpi_table": _build_kpi_table(files_info),
+        "finding_matrix": _build_finding_matrix(files_info),
+        "shared_beneficiaries": _find_shared_beneficiaries(reports),
+        "shared_findings": _find_shared_findings(files_info),
+    }
+
+    return {
+        "files": files_info,
+        "file_count": len(files_info),
+        "comparison": comparison,
+    }
+
+
+def _short_name(filename: str, maxlen: int = 30) -> str:
+    name = os.path.basename(filename or "")
+    if len(name) > maxlen:
+        name = name[:maxlen] + "…"
+    return name
+
+
+def _build_kpi_table(files_info: list[dict]) -> list[dict]:
+    """جدول مقارنة المؤشرات عبر الملفات."""
+    all_kpis: list[str] = []
+    for f in files_info:
+        for k in (f.get("kpis") or {}).keys():
+            if k not in all_kpis:
+                all_kpis.append(k)
+    return [
+        {"kpi": k, "values": [f.get("kpis", {}).get(k) for f in files_info]}
+        for k in all_kpis
+    ]
+
+
+def _build_finding_matrix(files_info: list[dict]) -> list[dict]:
+    """مصفوفة الملاحظات: أي ملاحظة موجودة في أي ملف وعددها."""
+    all_ids: list[str] = []
+    titles: dict[str, str] = {}
+    severities: dict[str, str] = {}
+    for f in files_info:
+        for finding in f.get("findings", []):
+            fid = finding.get("id", "")
+            if fid and fid not in all_ids:
+                all_ids.append(fid)
+                titles[fid] = finding.get("title_ar", "") or finding.get("title_en", "")
+                severities[fid] = finding.get("severity", "low")
+    matrix = []
+    for fid in all_ids:
+        counts = []
+        for f in files_info:
+            match = next((x for x in f.get("findings", []) if x.get("id") == fid), None)
+            counts.append(match.get("count", 0) if match else 0)
+        matrix.append({
+            "finding_id": fid,
+            "title": titles[fid],
+            "severity": severities[fid],
+            "counts": counts,
+        })
+    order = {"high": 0, "medium": 1, "low": 2}
+    matrix.sort(key=lambda m: (order.get(m["severity"], 3), -max(m["counts"])))
+    return matrix
+
+
+def _find_shared_findings(files_info: list[dict]) -> list[dict]:
+    """ملاحظات مشتركة بين ملفين أو أكثر."""
+    shared = []
+    for m in _build_finding_matrix(files_info):
+        present_in = [i for i, c in enumerate(m["counts"]) if c > 0]
+        if len(present_in) >= 2:
+            shared.append({
+                "finding_id": m["finding_id"],
+                "title": m["title"],
+                "severity": m["severity"],
+                "present_in_files": [files_info[i]["filename"] for i in present_in],
+                "counts": m["counts"],
+            })
+    return shared
+
+
+def _find_shared_beneficiaries(reports: list[dict]) -> list[dict]:
+    """مستفيدون يظهرون في أكثر من ملف."""
+    ben_map: dict[str, list[dict]] = {}
+    for r in reports:
+        preview = r.get("ledger_preview", []) or []
+        fname = r.get("filename", "")
+        for rec in preview:
+            ben = clean_text(rec.get("beneficiary"))
+            if not ben:
+                continue
+            nb = _norm_beneficiary(ben)
+            if not nb:
+                continue
+            entry = ben_map.setdefault(nb, {"name": ben, "files": {}, "amounts": {}})
+            entry["files"].setdefault(fname, 0)
+            entry["files"][fname] += 1
+            amt = rec.get("amount")
+            if isinstance(amt, (int, float)):
+                entry["amounts"].setdefault(fname, 0.0)
+                entry["amounts"][fname] += float(amt)
+
+    shared = []
+    for nb, info in ben_map.items():
+        if len(info["files"]) >= 2:
+            file_list = list(info["files"].keys())
+            shared.append({
+                "beneficiary": info["name"],
+                "files": file_list,
+                "transactions_per_file": [info["files"][f] for f in file_list],
+                "amounts_per_file": [round(info["amounts"].get(f, 0), 2) for f in file_list],
+            })
+    shared.sort(key=lambda x: len(x["files"]), reverse=True)
+    return shared[:50]
+
+
+def build_multi_digest(reports: list[dict], lang: str = "ar", max_items: int = 6) -> str:
+    """ملخص نصي يجمع عدة تقارير للذكاء الاصطناعي."""
+    import json as _json
+    lines: list[str] = []
+    if lang == "en":
+        lines.append(f"Comparative analysis of {len(reports)} files:")
+    else:
+        lines.append(f"تحليل مقارن لـ {len(reports)} ملفات:")
+    lines.append("")
+
+    for r in reports:
+        if lang == "en":
+            lines.append(f"=== File: {r.get('filename')} ===")
+            lines.append(f"  Type: {r.get('file_type')} | Records: {r.get('total_records_scanned')} | Risk: {r.get('risk_score')}% ({r.get('risk_level')})")
+            lines.append(f"  KPIs: {_json.dumps(r.get('kpis', {}), ensure_ascii=False)}")
+        else:
+            lines.append(f"=== الملف: {r.get('filename')} ===")
+            lines.append(f"  النوع: {r.get('file_type')} | السجلات: {r.get('total_records_scanned')} | الخطورة: {r.get('risk_score')}% ({r.get('risk_level')})")
+            lines.append(f"  المؤشرات: {_json.dumps(r.get('kpis', {}), ensure_ascii=False)}")
+        for f in (r.get("findings") or [])[:10]:
+            title = f["title_en"] if lang == "en" else f["title_ar"]
+            sev = f["severity_en"] if lang == "en" else f["severity_ar"]
+            lines.append(f"  - [{sev}] {title} — count={f['count']}")
+            for it in (f.get("items") or [])[:max_items]:
+                lines.append("    • " + _json.dumps(it, ensure_ascii=False, default=str))
+        lines.append("")
+
+    # ملخص المقارنة
+    cmp = compare_reports(reports)
+    shared_findings = cmp["comparison"].get("shared_findings", [])
+    shared_ben = cmp["comparison"].get("shared_beneficiaries", [])
+    if lang == "en":
+        lines.append("=== Comparative Summary ===")
+        lines.append(f"Shared findings across files: {len(shared_findings)}")
+        for sf in shared_findings[:8]:
+            lines.append(f"  - {sf['title']} (severity: {sf['severity']}, in {len(sf['present_in_files'])} files)")
+        lines.append(f"Shared beneficiaries across files: {len(shared_ben)}")
+        for sb in shared_ben[:8]:
+            lines.append(f"  - {sb['beneficiary']} (in {len(sb['files'])} files)")
+    else:
+        lines.append("=== ملخص المقارنة ===")
+        lines.append(f"ملاحظات مشتركة بين الملفات: {len(shared_findings)}")
+        for sf in shared_findings[:8]:
+            lines.append(f"  - {sf['title']} (الخطورة: {sf['severity']}, في {len(sf['present_in_files'])} ملف)")
+        lines.append(f"مستفيدون مشتركون بين الملفات: {len(shared_ben)}")
+        for sb in shared_ben[:8]:
+            lines.append(f"  - {sb['beneficiary']} (في {len(sb['files'])} ملف)")
+    return "\n".join(lines)
+
+
+def build_multi_chat_context(reports: list[dict], lang: str = "ar") -> str:
+    """سياق كامل للدردشة عبر عدة ملفات."""
+    return build_multi_digest(reports, lang=lang, max_items=10)

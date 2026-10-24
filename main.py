@@ -476,6 +476,35 @@ def _resolve_report(payload: dict) -> dict | None:
 # ---------------------------------------------------------------------------
 # AI analysis (Local LLM via Ollama)
 # ---------------------------------------------------------------------------
+def _resolve_reports(payload: dict) -> list[dict]:
+    """Resolve multiple reports from payload — supports report_ids list or single report_id/report."""
+    reports: list[dict] = []
+    rids = payload.get("report_ids")
+    if isinstance(rids, list):
+        with REPORTS_LOCK:
+            for rid in rids:
+                r = REPORTS.get(rid)
+                if r:
+                    reports.append(r)
+    if not reports:
+        single = _resolve_report(payload)
+        if single:
+            reports = [single]
+    return reports
+
+
+@app.post("/compare/")
+def compare_reports(payload: dict = Body(...)):
+    """Compare multiple audit reports — returns comparison data."""
+    reports = _resolve_reports(payload)
+    if len(reports) < 2:
+        return JSONResponse({"ok": False, "error": "need_at_least_2_reports"})
+    result = engine.compare_reports(reports)
+    result["ok"] = True
+    update_app_state("compare_run", file_count=len(reports))
+    return result
+
+
 @app.post("/analyze/")
 def analyze(payload: dict = Body(...)):
     """Stream a professional AI audit report generated from the audit findings."""
@@ -489,17 +518,20 @@ def analyze(payload: dict = Body(...)):
     if not url:
         return JSONResponse({"ok": False, "error": "no_url"})
 
-    report = _resolve_report(payload)
-    if report is None:
+    reports = _resolve_reports(payload)
+    if not reports:
         return JSONResponse({"ok": False, "error": "no_report"})
 
     limit = int(cfg.get("max_ai_records", 40))
-    digest = engine.build_digest(report, lang=lang, max_items=max(3, limit // 6))
+    if len(reports) > 1:
+        digest = engine.build_multi_digest(reports, lang=lang, max_items=max(3, limit // 6))
+    else:
+        digest = engine.build_digest(reports[0], lang=lang, max_items=max(3, limit // 6))
     messages = _prompt_messages(lang, digest)
     base = url.rstrip("/")
     body = _ollama_body(messages, model, cfg, stream=True)
 
-    update_app_state("analyze_start", model=model, language=lang, url=base)
+    update_app_state("analyze_start", model=model, language=lang, url=base, file_count=len(reports))
 
     # Pre-flight the connection so real errors surface as JSON, not mid-stream.
     try:
@@ -539,11 +571,14 @@ def chat(payload: dict = Body(...)):
     if not question:
         return JSONResponse({"ok": False, "error": "no_question"})
 
-    report = _resolve_report(payload)
-    if report is None:
+    reports = _resolve_reports(payload)
+    if not reports:
         return JSONResponse({"ok": False, "error": "no_report"})
 
-    context = engine.build_chat_context(report, lang=lang)
+    if len(reports) > 1:
+        context = engine.build_multi_chat_context(reports, lang=lang)
+    else:
+        context = engine.build_chat_context(reports[0], lang=lang)
     messages = [{"role": "system", "content": _chat_system_prompt(lang, context)}]
     for turn in (payload.get("history") or [])[-8:]:
         role = turn.get("role")
